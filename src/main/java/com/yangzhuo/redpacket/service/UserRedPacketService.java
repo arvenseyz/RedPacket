@@ -1,0 +1,16 @@
+package com.yangzhuo.redpacket.service;
+
+/**
+ *@author yangzhuo
+ */
+
+public interface UserRedPacketService {
+    /**
+     * 保存抢红包信息
+     * @param redPacketId 红包编号
+     * @param userId 抢红包用户信息
+     * @return 影响记录数
+     */
+     int grabRedPacket(Long redPacketId,Long userId);
+
+}
