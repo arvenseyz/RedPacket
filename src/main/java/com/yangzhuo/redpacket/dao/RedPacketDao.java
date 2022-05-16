@@ -1,10 +1,10 @@
 package com.yangzhuo.redpacket.dao;
 
 import com.yangzhuo.redpacket.domain.RedPacket;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 import org.springframework.stereotype.Repository;
+
+import java.util.List;
 
 
 /**
@@ -15,37 +15,46 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface RedPacketDao {
     String TABLE_NAME = " t_red_packet ";
-    String SELECT_FIELDS = " id , user_id, amount, send_date, total, unit_amount, stock, version, note ";
+    String SELECT_FIELDS = " red_packet_id , user_id,group_id, amount, init_amount,send_date, total,  stock, version, note ";
+    String INSERT_FIELDS = " red_packet_id , user_id,group_id, amount, init_amount,send_date, total,  stock, version, note ";
     /**
      * 获取红包信息
-     * @param id 红包编号
+     * @param packetId 红包编号
      * @return 红包的具体信息
      */
-    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where id = #{id}"})
-    RedPacket getRedPacket(Long id);
+    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where packet_id = #{packetId}"})
+    RedPacket getRedPacket(long packetId);
 
+
+    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where send_date between now() and now()-86400*2"})
+    List<RedPacket> getYesterDayRedPacket();
     /**
      * 加入悲观锁后获取红包信息的查询语句
-     * @param id 红包编号
+     * @param packetId 红包编号
      * @return 红包具体信息
      */
-    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where id = #{id} for update"})
-    RedPacket getRedPacketForUpdate(Long id);
+    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where packet_id = #{packetId} for update"})
+    RedPacket getRedPacketForUpdate(long packetId);
 
     /**
      * 扣减红包数
-     * @param id 红包编号
+     * @param packetId 红包编号
      * @return 更新记录数
      */
-    @Update({" update ",TABLE_NAME," set stock = stock-1 where id = #{id}"})
-    int decreaseRedPacket(Long id);
+    @Update({" update ",TABLE_NAME," set stock = stock-1 , amount= amount - #{id} where packet_id = #{packetId} and stock > 1"})
+    int decreaseRedPacket(long packetId,int amount);
 
     /**
-     * 引入乐观锁，通过版本编号扣减抢红包数，每更新一次，版本增1，其次增加对版本号的判断
-     * @param id 红包编号
-     * @param version 版本号
-     * @return
+     * 插入红包信息
+     * @param redPacket 红包信息
+     * @return 影响记录数
+     * 注解@Options 获取插入的主键信息
      */
-    @Update({" update ",TABLE_NAME," set stock = stock-1,version = version+1 where id = #{id} and version = #{version}"})
-    int decreaseRedPacketForVersion(Long id,Integer version);
+    @Insert({"insert into ",TABLE_NAME,"(",INSERT_FIELDS,") values (#{redPacketId},#{userId},#{amount},#{amount},now(),,#{stock},#{stock}#{note})"})
+    @Options(useGeneratedKeys = true,keyProperty = "id")
+    int sendRedPacket(RedPacket redPacket);
+
+
+    @Select({" select ",SELECT_FIELDS," from ",TABLE_NAME," where group_id = #{groupId}"})
+    RedPacket getRedPacketByGroupId(long groupId);
 }

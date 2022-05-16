@@ -14,10 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class RedPacketServiceImpl implements RedPacketService{
-    /**
-     * 不建议使用(变量)属性输入的方法，而是使用构造器注入
-     * 如果这个类使用了依赖注入的类，那么这个类摆脱了这几个依赖必须也能正常运行
-     */
+
     private final RedPacketDao redPacketDao;
 
     @Autowired
@@ -42,8 +39,13 @@ public class RedPacketServiceImpl implements RedPacketService{
      */
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED,propagation = Propagation.REQUIRED,rollbackFor = Exception.class)
-    public int decreaseRedPacket(Long id) {
-        return redPacketDao.decreaseRedPacket(id);
+    public int decreaseRedPacket(Long packetId,int amount) {
+        return redPacketDao.decreaseRedPacket(packetId,amount);
     }
 
+
+    @Override
+    public RedPacket queryGroupRedPacket(Long groupId){
+        return redPacketDao.getRedPacketByGroupId(groupId);
+    }
 }

@@ -1,14 +1,26 @@
 package com.yangzhuo.redpacket.service;
 
+import com.alibaba.fastjson.JSON;
+import com.yangzhuo.redpacket.dao.AccountDao;
 import com.yangzhuo.redpacket.dao.RedPacketDao;
 import com.yangzhuo.redpacket.dao.UserRedPacketDao;
 import com.yangzhuo.redpacket.domain.RedPacket;
 import com.yangzhuo.redpacket.domain.UserRedPacket;
+import com.yangzhuo.redpacket.queue.MqMessage;
+import com.yangzhuo.redpacket.service.Strategy.StrategyFactory;
+import org.apache.rocketmq.client.producer.SendResult;
+import org.apache.rocketmq.client.producer.SendStatus;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
 
 /**
  * @author yangzhuo
@@ -19,21 +31,61 @@ public class UserRedPacketServiceImpl implements UserRedPacketService {
 
     private final UserRedPacketDao userRedPacketDao;
     private final RedPacketDao redPacketDao;
+    private final AccountDao accountDao;
     @Autowired
-    public UserRedPacketServiceImpl(UserRedPacketDao userRedPacketDao, RedPacketDao redPacketDao) {
+    private ApplicationContext context;
+    private RocketMQTemplate rocketMQTemplate;
+
+
+    @Autowired
+    public UserRedPacketServiceImpl(UserRedPacketDao userRedPacketDao, RedPacketDao redPacketDao, AccountDao accountDao) {
         this.userRedPacketDao = userRedPacketDao;
         this.redPacketDao = redPacketDao;
+        this.accountDao = accountDao;
     }
     private static final int FAILED = 0;
+    private static final int SUCCESS = 1;
+
+
+
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED,propagation = Propagation.REQUIRED,rollbackFor = Exception.class)
+    public int sendRedPacket(Long userId,int stock, int amount,String splitType) {
+        //扣钱
+        //1. 更新账户
+        int success=accountDao.decreaseAccount(userId,amount);
+        if (success==0){
+            throw new RuntimeException("account error");
+        }
+        //2. 生成红包
+        RedPacket redPacket = new RedPacket();
+        redPacket.setRedPacketId(Snowflake.GetId());
+        redPacket.setSplitType(splitType);
+        redPacket.setUserId(userId);
+        redPacket.setSendDate(LocalDateTime.now().toInstant(ZoneOffset.of("+8")).toEpochMilli());
+        redPacket.setTotal(stock);
+        redPacket.setStock(stock);
+        redPacket.setAmount(amount);
+        redPacket.setInitAmount(amount);
+        success=redPacketDao.sendRedPacket(redPacket);
+        if (success==0){
+            throw new RuntimeException("account error");
+        }
+        //3. 延时消息
+        MqMessage msg = new MqMessage();
+        msg.setRedPacketId(redPacket.getRedPacketId());
+        msg.setUid(userId);
+        SendResult result=rocketMQTemplate.syncSend("myTest", JSON.toJSONString(redPacket),MqMessage.GetDelayLevel(seconds));
+        if (!result.getSendStatus().equals(SendStatus.SEND_OK)){
+            throw new RuntimeException("account error");
+        }
+        return SUCCESS;
+
+    }
 
     /**
      *
-     * v3.0加入乐观锁（版本号）获取红包信息
-     * 如果红包库存大于0，扣减剩余红包数目，生成抢红包的信息
-     *              * 获取红包信息后，再次传入线程保存的version旧值给SQL判断，
-     *              * 是否有其他线程修改过数据
-     * v4.0针对乐观锁造成大量数据更新失败的问题，考虑重入机制（按时间戳）
-     *              * 记录开始时间，获取当前循环时间，等待成功或者时间超出100ms则退出
      * @param redPacketId 红包编号
      * @param userId 抢红包用户信息
      * @return 影响记录数
@@ -41,28 +93,37 @@ public class UserRedPacketServiceImpl implements UserRedPacketService {
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED,propagation = Propagation.REQUIRED,rollbackFor = Exception.class)
     public int grabRedPacket(Long redPacketId, Long userId) {
-        Long start =System.currentTimeMillis();
-        while(true){
-            Long end = System.currentTimeMillis();
-            if(end-start>100){
-                return FAILED;
-            }
-            RedPacket redPacket = redPacketDao.getRedPacket(redPacketId);
-            if(redPacket.getStock()>0){
-                int update = redPacketDao.decreaseRedPacketForVersion(redPacketId,redPacket.getVersion());
-                if(update==0){
-                    continue;
-                }
-                UserRedPacket userRedPacket = new UserRedPacket();
-                userRedPacket.setRedPacketId(redPacketId);
-                userRedPacket.setUserId(userId);
-                userRedPacket.setAmount(redPacket.getUnitAmount());
-                userRedPacket.setNote("抢红包 "+ redPacketId);
-                return userRedPacketDao.grabRedPacket(userRedPacket);
-            }
-            return FAILED;
+        //1. 锁一个红包
+        RedPacket redPacket = redPacketDao.getRedPacketForUpdate(redPacketId);
+        if (redPacket.getStock()==0){
+            throw new RuntimeException("account error");
         }
+        //2. 生成红包金额(单位分）
+        int amount=context.getBean(StrategyFactory.class).getBy(redPacket.getSplitType()).getAmount(redPacket);
+        //3. 更新账户
+        accountDao.addAccount(userId,amount);
+        //4. 插入红包记录
+        UserRedPacket userRedPacket = new UserRedPacket();
+        userRedPacket.setRedPacketId(redPacketId);
+        userRedPacket.setUserId(userId);
+        userRedPacket.setAmount(amout);
+        int success=userRedPacketDao.grabRedPacket(new UserRedPacket());
+        if (success==0) {
+            throw new RuntimeException("account error");
+        }
+        //5. 更新大红包余额和库存
+        success=redPacketDao.decreaseRedPacket(redPacketId,amount);
+        if (success==0) {
+            throw new RuntimeException("account error");
+        }
+        return SUCCESS;
+    }
 
+    @Override
+    public List<UserRedPacket> queryUserRedPacket(Long userId){
+        return userRedPacketDao.getUserRedPacketsByUserId(userId);
     }
 
 }
+
+

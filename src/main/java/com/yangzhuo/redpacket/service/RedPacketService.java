@@ -25,5 +25,7 @@ public interface RedPacketService {
      * @param id 编号
      * @return 影响记录数
      */
-   int decreaseRedPacket(Long id);
+   int decreaseRedPacket(Long id,int amount);
+
+    RedPacket queryGroupRedPacket(Long groupId);
 }

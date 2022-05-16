@@ -33,7 +33,7 @@ public class UserRedPacket implements Serializable {
     /**
      * 单个红包金额
      */
-    private Double amount;
+    private int amount;
     /**
      * 抢红包时间
      */
